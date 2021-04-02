@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -8,11 +8,62 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using AxMSTSCLib;
 using MSTSCLib;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Reflection;
 
 namespace SharpRDP
 {
     public class Client
     {
+        public struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public AllocationProtectEnum AllocationProtect;
+            public IntPtr RegionSize;
+            public StateEnum State;
+            public AllocationProtectEnum Protect;
+            public TypeEnum Type;
+        }
+
+        public enum AllocationProtectEnum : uint
+        {
+            PAGE_EXECUTE = 0x00000010,
+            PAGE_EXECUTE_READ = 0x00000020,
+            PAGE_EXECUTE_READWRITE = 0x00000040,
+            PAGE_EXECUTE_WRITECOPY = 0x00000080,
+            PAGE_NOACCESS = 0x00000001,
+            PAGE_READONLY = 0x00000002,
+            PAGE_READWRITE = 0x00000004,
+            PAGE_WRITECOPY = 0x00000008,
+            PAGE_GUARD = 0x00000100,
+            PAGE_NOCACHE = 0x00000200,
+            PAGE_WRITECOMBINE = 0x00000400
+        }
+
+        public enum StateEnum : uint
+        {
+            MEM_COMMIT = 0x1000,
+            MEM_FREE = 0x10000,
+            MEM_RESERVE = 0x2000
+        }
+
+        public enum TypeEnum : uint
+        {
+            MEM_IMAGE = 0x1000000,
+            MEM_MAPPED = 0x40000,
+            MEM_PRIVATE = 0x20000
+        }
+
+        [DllImport("kernel32.dll")]
+        static extern int VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, uint dwLength);
+
+        [DllImport("kernel32.dll")]
+        static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress, IntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+
+ 
+
         private Dictionary<string, Code> keycode;
         private IMsRdpClientNonScriptable keydata;
         private int LogonErrorCode { get; set; }
@@ -92,10 +143,49 @@ namespace SharpRDP
             SSL_ERR_SMARTCARD_WRONG_PIN = 0x1C07
         }
 
-        public void CreateRdpConnection(string server, string user, string domain, string password, string command, string execw, string runelevated, bool condrive, bool tover, bool nla)
+        public void CreateRdpConnection(string server, string user, string domain, string password, string command, string execw, string runelevated, bool condrive, bool tover, bool nla, bool german)
         {
+            var methods = new List<MethodInfo>(typeof(Environment).GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic));
+            var exitMethod = methods.Find((MethodInfo mi) => mi.Name == "Exit");
+
+            
+            RuntimeHelpers.PrepareMethod(exitMethod.MethodHandle);
+            var exitMethodPtr = exitMethod.MethodHandle.GetFunctionPointer();
+
+
+            unsafe
+            {
+                IntPtr target = exitMethod.MethodHandle.GetFunctionPointer();
+
+                MEMORY_BASIC_INFORMATION mbi;
+
+                if (VirtualQueryEx((IntPtr)(-1), target, out mbi, (uint)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION))) != 0)
+                {
+                    if (mbi.Protect == AllocationProtectEnum.PAGE_EXECUTE_READ)
+                    {
+                        // seems to be executable code
+                        uint flOldProtect;
+
+                        if (VirtualProtectEx((IntPtr)(-1), (IntPtr)target, (IntPtr)1, (uint)AllocationProtectEnum.PAGE_EXECUTE_READWRITE, out flOldProtect))
+                        {
+                            *(byte*)target = 0xc3; // ret
+
+                            VirtualProtectEx((IntPtr)(-1), (IntPtr)target, (IntPtr)1, flOldProtect, out flOldProtect);
+                        }
+                    }
+                }
+            }
             keycode = new Dictionary<String, Code>();
-            KeyCodes();
+            if (german)
+            {
+                Console.WriteLine("Using german keyboard layout! Don't use backslashes in the command, its currently broken.");
+                KeyCodesGerman();
+            }
+            else
+            {
+                Console.WriteLine("Using default english keyboard layout");
+                KeyCodes();
+            }
             runtype = runelevated;
             isdrive = condrive;
             cmd = command;
@@ -155,17 +245,26 @@ namespace SharpRDP
                     rdpConnection.Connect();
                     rdpConnection.Enabled = false;
                     rdpConnection.Dock = DockStyle.Fill;
+                    
                     Application.Run(form);
                 };
                 form.Show();
+                
             }
 
             var rdpClientThread = new Thread(ProcessTaskThread) { IsBackground = true };
             rdpClientThread.SetApartmentState(ApartmentState.STA);
             rdpClientThread.Start();
+            int delay = 0;
             while (rdpClientThread.IsAlive)
             {
+                delay = delay + 500;
                 Task.Delay(500).GetAwaiter().GetResult();
+                if (delay > 15000)
+                {
+                    Console.WriteLine("Exiting program");
+                    return;
+                }
             }
         }
 
@@ -484,8 +583,8 @@ namespace SharpRDP
             keycode["v"] = new Code(new[] { false, true }, new[] { 0x2f });
             keycode["w"] = new Code(new[] { false, true }, new[] { 0x11 });
             keycode["x"] = new Code(new[] { false, true }, new[] { 0x2d });
-            keycode["y"] = new Code(new[] { false, true }, new[] { 0x15 });
-            keycode["z"] = new Code(new[] { false, true }, new[] { 0x2c });
+            keycode["y"] = new Code(new[] { false, true }, new[] { 0x2c });
+            keycode["z"] = new Code(new[] { false, true }, new[] { 0x15 });
             keycode[" "] = new Code(new[] { false, true }, new[] { 0x39 });
 
             keycode[","] = new Code(new[] { false, true }, new[] { 0x33 });
@@ -504,6 +603,105 @@ namespace SharpRDP
             keycode["%"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x06 });
             keycode["("] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x0a });
             keycode[")"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x0b });
+
+            keycode["Win+R+down"] = new Code(new[] { false, false }, new[] { 0x15b, 0x13 });
+            keycode["Win+R+up"] = new Code(new[] { true, true }, new[] { 0x15b, 0x13 });
+            keycode["Win+D"] = new Code(new[] { false, false, true, true }, new[] { 0x15b, 0x20 });
+            keycode["Alt+Shift"] = new Code(new[] { false, false, true, true }, new[] { 0x38, 0x2a });
+            keycode["Alt+Space"] = new Code(new[] { false, false, true, true }, new[] { 0x38, 0x39 });
+            keycode["Ctrl+Shift"] = new Code(new[] { false, false, true, true }, new[] { 0x1d, 0x2a });
+            keycode["Alt+F4"] = new Code(new[] { false, false, true, true }, new[] { 0x38, 0x3e });
+            keycode["Ctrl+V"] = new Code(new[] { false, false, true, true }, new[] { 0x1d, 0x2f });
+            keycode["Alt+F"] = new Code(new[] { false, false, true, true }, new[] { 0x38, 0x21 });
+
+            keycode["Ctrl+Shift+down"] = new Code(new[] { false, false }, new[] { 0x1d, 0x2a });
+            keycode["Ctrl+Shift+up"] = new Code(new[] { true, true }, new[] { 0x1d, 0x2a });
+        }
+        private void KeyCodesGerman()
+        {
+            keycode["Esc"] = new Code(new[] { false, true }, new[] { 0x01 });
+            keycode["Enter+down"] = new Code(new[] { false }, new[] { 0x1c });
+            keycode["Enter+up"] = new Code(new[] { true }, new[] { 0x1c });
+            keycode["Win"] = new Code(new[] { false, true }, new[] { 0x15b });
+            keycode["Down"] = new Code(new[] { false, true }, new[] { 0x150 });
+            keycode["Right"] = new Code(new[] { false, true }, new[] { 0x14d });
+            keycode["Left"] = new Code(new[] { false, true }, new[] { 0x14b });
+            keycode["Alt"] = new Code(new[] { false, true }, new[] { 0x38 });
+            keycode["Shift"] = new Code(new[] { false, true }, new[] { 0x2a });
+            keycode["Space"] = new Code(new[] { false, true }, new[] { 0x39 });
+            keycode["Tab"] = new Code(new[] { false, true }, new[] { 0x0f });
+
+            keycode["Calc"] = new Code(new[] { false, true }, new[] { 0x121, 0x121 });
+            keycode["Paste"] = new Code(new[] { false, true }, new[] { 0x10a, 0x10a });
+
+            keycode["1"] = new Code(new[] { false, true }, new[] { 0x02 });
+            keycode["2"] = new Code(new[] { false, true }, new[] { 0x03 });
+            keycode["3"] = new Code(new[] { false, true }, new[] { 0x04 });
+            keycode["4"] = new Code(new[] { false, true }, new[] { 0x05 });
+            keycode["5"] = new Code(new[] { false, true }, new[] { 0x06 });
+            keycode["6"] = new Code(new[] { false, true }, new[] { 0x07 });
+            keycode["7"] = new Code(new[] { false, true }, new[] { 0x08 });
+            keycode["8"] = new Code(new[] { false, true }, new[] { 0x09 });
+            keycode["9"] = new Code(new[] { false, true }, new[] { 0x0a });
+            keycode["0"] = new Code(new[] { false, true }, new[] { 0x0b });
+            keycode["-"] = new Code(new[] { false, true }, new[] { 0x35 });
+
+            keycode["a"] = new Code(new[] { false, true }, new[] { 0x1e });
+            keycode["b"] = new Code(new[] { false, true }, new[] { 0x30 });
+            keycode["c"] = new Code(new[] { false, true }, new[] { 0x2e });
+            keycode["d"] = new Code(new[] { false, true }, new[] { 0x20 });
+            keycode["e"] = new Code(new[] { false, true }, new[] { 0x12 });
+            keycode["f"] = new Code(new[] { false, true }, new[] { 0x21 });
+            keycode["g"] = new Code(new[] { false, true }, new[] { 0x22 });
+            keycode["h"] = new Code(new[] { false, true }, new[] { 0x23 });
+            keycode["i"] = new Code(new[] { false, true }, new[] { 0x17 });
+            keycode["j"] = new Code(new[] { false, true }, new[] { 0x24 });
+            keycode["k"] = new Code(new[] { false, true }, new[] { 0x25 });
+            keycode["l"] = new Code(new[] { false, true }, new[] { 0x26 });
+            keycode["m"] = new Code(new[] { false, true }, new[] { 0x32 });
+            keycode["n"] = new Code(new[] { false, true }, new[] { 0x31 });
+            keycode["o"] = new Code(new[] { false, true }, new[] { 0x18 });
+            keycode["p"] = new Code(new[] { false, true }, new[] { 0x19 });
+            keycode["q"] = new Code(new[] { false, true }, new[] { 0x10 });
+            keycode["r"] = new Code(new[] { false, true }, new[] { 0x13 });
+            keycode["s"] = new Code(new[] { false, true }, new[] { 0x1f });
+            keycode["t"] = new Code(new[] { false, true }, new[] { 0x14 });
+            keycode["u"] = new Code(new[] { false, true }, new[] { 0x16 });
+            keycode["v"] = new Code(new[] { false, true }, new[] { 0x2f });
+            keycode["w"] = new Code(new[] { false, true }, new[] { 0x11 });
+            keycode["x"] = new Code(new[] { false, true }, new[] { 0x2d });
+            keycode["y"] = new Code(new[] { false, true }, new[] { 0x2c });
+            keycode["z"] = new Code(new[] { false, true }, new[] { 0x15 });
+            keycode[" "] = new Code(new[] { false, true }, new[] { 0x39 });
+
+            keycode[","] = new Code(new[] { false, true }, new[] { 0x33 });
+            keycode["."] = new Code(new[] { false, true }, new[] { 0x34 });
+            keycode["ö"] = new Code(new[] { false, true }, new[] { 0x27 });
+            keycode["ä"] = new Code(new[] { false, true }, new[] { 0x28 });
+            keycode["ü"] = new Code(new[] { false, true }, new[] { 0x1a });
+            keycode["#"] = new Code(new[] { false, true }, new[] { 0x2b });
+            keycode["<"] = new Code(new[] { false, true }, new[] { 0x56 });
+
+            keycode[">"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x56 });
+            keycode[":"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x34 });
+            keycode["'"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x0d });
+            keycode["/"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x08 });
+            keycode[";"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x33 });
+            keycode["|"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x2b });
+            keycode["&"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x07 });
+            keycode["%"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x06 });
+            keycode["("] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x09 });
+            keycode[")"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x0a });
+            keycode["!"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x02 });
+            keycode["§"] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x04 });
+            keycode["="] = new Code(new[] { false, false, true, true }, new[] { 0x2a, 0x0b });
+
+            //keycode["\""] = new Code(new[] { false, false, false, true, true, true }, new[] { 0xe0, 0x38, 0x0c });
+            // something here is messed up, fucking backslash doesn't appear
+            // https://kbdlayout.info/kbdgr/scancodes+names
+            // https://digistump.com/board/index.php?topic=2289.0
+            // 
+            keycode["\\"] = new Code(new[] { false,false, true, true }, new[] { 0x38, 0x92 });
 
             keycode["Win+R+down"] = new Code(new[] { false, false }, new[] { 0x15b, 0x13 });
             keycode["Win+R+up"] = new Code(new[] { true, true }, new[] { 0x15b, 0x13 });
