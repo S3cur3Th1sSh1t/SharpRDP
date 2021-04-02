@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO.Compression;
 using System.Reflection;
 using System.Collections.Generic;
@@ -6,7 +6,7 @@ using System.IO;
 
 namespace SharpRDP
 {
-    class Program
+    public class Program
     {
         static void HowTo()
         {
@@ -14,6 +14,8 @@ namespace SharpRDP
             Console.WriteLine("");
             Console.WriteLine("  Regular RDP Connection");
             Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password");
+            Console.WriteLine("  Regular RDP Connection with german keyboard layout");
+            Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password german=true");
             Console.WriteLine("  Exec as child process of cmd or ps ");
             Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password exec=cmd");
             Console.WriteLine("  Use restricted admin mode");
@@ -29,8 +31,11 @@ namespace SharpRDP
             Console.WriteLine("  Execute command elevated through task manager");
             Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password elevated=taskmgr");
         }
-        static void Main(string[] args)
+
+
+        public static void Main(string[] args)
         {
+
             AppDomain.CurrentDomain.AssemblyResolve += (sender, argtwo) => {
                 Assembly thisAssembly = Assembly.GetEntryAssembly();
                 String resourceName = string.Format("SharpRDP.{0}.dll.bin",
@@ -62,6 +67,7 @@ namespace SharpRDP
             bool connectdrive = false;
             bool takeover = false;
             bool nla = false;
+            bool german = false;
             
             if (arguments.ContainsKey("username"))
             {
@@ -143,10 +149,17 @@ namespace SharpRDP
                         nla = true;
                     }
                 }
+                if (arguments.ContainsKey("german"))
+                {
+                    if (arguments["german"].ToLower() == "true")
+                    {
+                        german = true;
+                    }
+                }
                 string[] computerNames = arguments["computername"].Split(',');
                 foreach (string server in computerNames)
                 {
-                    rdpconn.CreateRdpConnection(server, username, domain, password, command, execw, execElevated, connectdrive, takeover, nla);
+                    rdpconn.CreateRdpConnection(server, username, domain, password, command, execw, execElevated, connectdrive, takeover, nla, german);
                 }
             }
             else
